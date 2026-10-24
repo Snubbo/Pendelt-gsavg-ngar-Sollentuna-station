@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sollentuna pendeltåg</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #181c23;
+    --row: #1f242d;
+    --text: #f2f4f7;
+    --muted: #9aa3b2;
+    --pink: #d6448a;
+    --warn: #f5b942;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); }
+  body {
+    font-family: "Segoe UI", "LG Smart UI", Roboto, Arial, sans-serif;
+    font-size: 1.6vw;
+    padding: 2.2vw 3vw;
+    display: flex; flex-direction: column; gap: 1.6vw;
+    overflow: hidden;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; }
+  h1 { font-size: 3.4vw; font-weight: 700; letter-spacing: -0.02em; }
+  h1 small { font-size: 1.6vw; font-weight: 500; color: var(--muted); margin-left: 1vw; }
+  #clock { font-size: 3.4vw; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #alerts { display: none; background: #3a2c10; color: var(--warn); border-radius: .6vw; padding: .9vw 1.3vw; font-size: 1.4vw; }
+  main { display: flex; gap: 2vw; flex: 1; min-height: 0; }
+  section { flex: 1; background: var(--panel); border-radius: 1vw; padding: 1.4vw; display: flex; flex-direction: column; gap: .8vw; min-width: 0; }
+  section h2 { font-size: 1.7vw; font-weight: 600; color: var(--muted); padding: 0 .4vw .4vw; }
+  section h2 b { color: var(--text); }
+  .row { display: grid; grid-template-columns: 4.4vw 1fr auto 3.6vw; align-items: center; gap: 1.2vw; background: var(--row); border-radius: .7vw; padding: 1vw 1.2vw; }
+  .line { background: var(--pink); color: #fff; font-weight: 700; border-radius: 99px; text-align: center; padding: .2vw 0; font-size: 1.6vw; }
+  .dest { font-size: 2vw; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dest .dev { display: block; font-size: 1.2vw; font-weight: 500; color: var(--warn); white-space: normal; margin-top: .2vw; }
+  .time { font-size: 2.2vw; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .time .sched { display: block; font-size: 1.1vw; font-weight: 500; color: var(--muted); text-decoration: line-through; }
+  .time.now { color: #7ee2a8; }
+  .time.late { color: var(--warn); }
+  .time.cancel { color: var(--bad); font-size: 1.8vw; }
+  .track { background: #fff; color: #111; font-weight: 700; font-size: 1.9vw; text-align: center; border-radius: .4vw; padding: .3vw 0; }
+  .empty { color: var(--muted); padding: 1vw .4vw; }
+  footer { display: flex; justify-content: space-between; color: var(--muted); font-size: 1.2vw; }
+  #status.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sollentuna <small>Pendeltåg</small></h1>
+  <div id="clock">--:--</div>
+</header>
+<div id="alerts"></div>
+<main>
+  <section><h2>Mot <b>Stockholm C · Södertälje</b></h2><div id="dir1"></div></section>
+  <section><h2>Mot <b>Märsta · Uppsala</b></h2><div id="dir2"></div></section>
+</main>
+<footer>
+  <span id="status">Hämtar avgångar…</span>
+  <span>Källa: SL</span>
+</footer>
+
+<script>
+  var SITE = 9506;            // Sollentuna
+  var REFRESH_MS = 30000;     // fetch new data every 30 s
+  var ROWS = 7;              // departures per direction
+  var URL = "https://transport.integration.sl.se/v1/sites/" + SITE + "/departures?transport=TRAIN&forecast=120";
+
+  var data = null, lastOk = null;
+
+  // API times are local Swedish time without offset ("2026-10-24T20:36:00")
+  function parse(s) {
+    var p = s.split(/[-T:]/);
+    return new Date(+p[0], p[1] - 1, +p[2], +p[3], +p[4], +(p[5] || 0));
+  }
+  function hhmm(d) { return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  function row(d, now) {
+    var exp = parse(d.expected || d.scheduled), sch = parse(d.scheduled);
+    var mins = Math.floor((exp - now) / 60000);
+    var late = (exp - sch) >= 60000;
+    var cls = "time", txt;
+    if (d.state === "CANCELLED") { cls += " cancel"; txt = "Inställd"; }
+    else {
+      txt = mins <= 0 ? "Nu" : mins < 30 ? mins + " min" : hhmm(exp);
+      if (mins <= 0) cls += " now"; else if (late) cls += " late";
+      if (late) txt += '<span class="sched">' + hhmm(sch) + "</span>";
+    }
+    var devs = (d.deviations || []).map(function (x) { return esc(x.message); }).join(" · ");
+    return '<div class="row">' +
+      '<div class="line">' + esc(d.line.designation) + "</div>" +
+      '<div class="dest">' + esc(d.destination) + (devs ? '<span class="dev">' + devs + "</span>" : "") + "</div>" +
+      '<div class="' + cls + '">' + txt + "</div>" +
+      '<div class="track">' + esc((d.stop_point && d.stop_point.designation) || "–") + "</div>" +
+      "</div>";
+  }
+
+  function render() {
+    var now = new Date();
+    document.getElementById("clock").textContent = hhmm(now);
+    if (!data) return;
+    [1, 2].forEach(function (dir) {
+      var list = (data.departures || []).filter(function (d) {
+        return d.direction_code === dir && parse(d.expected || d.scheduled) - now > -60000;
+      }).slice(0, ROWS);
+      document.getElementById("dir" + dir).innerHTML = list.length
+        ? list.map(function (d) { return row(d, now); }).join("")
+        : '<div class="empty">Inga avgångar de närmaste två timmarna.</div>';
+    });
+    var alerts = (data.stop_deviations || []).map(function (x) { return esc(x.message); });
+    var a = document.getElementById("alerts");
+    a.style.display = alerts.length ? "block" : "none";
+    a.innerHTML = alerts.join("<br>");
+  }
+
+  function load() {
+    fetch(URL, { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (j) {
+        data = j; lastOk = new Date();
+        var s = document.getElementById("status");
+        s.className = ""; s.textContent = "Uppdaterad " + hhmm(lastOk);
+        render();
+      })
+      .catch(function () {
+        var s = document.getElementById("status");
+        s.className = "err";
+        s.textContent = "Kunde inte uppdatera" + (lastOk ? " – visar data från " + hhmm(lastOk) : "") + ", försöker igen…";
+      });
+  }
+
+  load();
+  setInterval(load, REFRESH_MS);
+  setInterval(render, 5000);  // keep countdowns and clock ticking between fetches
+</script>
+</body>
+</html>
